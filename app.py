@@ -24,8 +24,12 @@ st.set_page_config(
 # Initialize session state variables
 if "user_id" not in st.session_state:
     st.session_state.user_id = str(uuid.uuid4())
-if "chat_history" not in st.session_state:
-    st.session_state.chat_history = []
+if "advisor_chat_history" not in st.session_state:
+    st.session_state.advisor_chat_history = []
+if "partner_chat_history" not in st.session_state:
+    st.session_state.partner_chat_history = []
+if "chat_mode" not in st.session_state:
+    st.session_state.chat_mode = "advisor"  # Can be "advisor" or "partner"
 if "profile" not in st.session_state:
     st.session_state.profile = {
         "name": "",
@@ -33,44 +37,29 @@ if "profile" not in st.session_state:
         "gender": "",
         "interested_in": [],
         "relationship_goals": "",
-        "hobbies": []
+        "hobbies": [],
+        "personality_traits": [],  # Added: user's personality traits
+        "ideal_partner_traits": [], # Added: desired partner traits
+        "deal_breakers": [],       # Added: absolute no-gos
+        "love_language": "",       # Added: primary love language
+        "communication_style": "", # Added: preferred communication style
+        "life_goals": [],         # Added: future aspirations
+        "values": [],             # Added: core values
+        "location": "",           # Added: general location
+        "languages": [],          # Added: languages spoken
+        "education": "",          # Added: education level
+        "occupation": ""          # Added: current occupation
     }
 if "conversation_context" not in st.session_state:
     st.session_state.conversation_context = {
         "last_date_discussed": None,
         "last_match_suggested": None,
-        "recent_topics": []
+        "recent_topics": [],
+        "conversation_style": "casual",
+        "role_playing": False  # Track if we're in role-playing mode
     }
 if "current_tab" not in st.session_state:
-    st.session_state.current_tab = "chat"
-if "matches" not in st.session_state:
-    # Sample matches for now (would be retrieved from a DB in production)
-    st.session_state.matches = [
-        {
-            "id": "match_1",
-            "name": "Alex",
-            "age": 28,
-            "gender": "Non-binary",
-            "interests": ["hiking", "cooking", "art galleries"],
-            "compatibility": 85
-        },
-        {
-            "id": "match_2",
-            "name": "Jordan",
-            "age": 31,
-            "gender": "Female",
-            "interests": ["rock climbing", "travel", "photography"],
-            "compatibility": 79
-        },
-        {
-            "id": "match_3",
-            "name": "Taylor",
-            "age": 26,
-            "gender": "Male",
-            "interests": ["reading", "coffee shops", "concerts"],
-            "compatibility": 92
-        }
-    ]
+    st.session_state.current_tab = "home"
 
 # Define LangGraph state schema
 class ChatState(dict):
@@ -87,103 +76,171 @@ def get_groq_client():
         st.stop()
     return Groq(api_key=api_key)
 
-# System prompt for the dating advisor
+# System prompts
 DATING_ADVISOR_PROMPT = """
-You are Date Mate, a friendly and insightful dating advisor. Your purpose is to help users navigate their dating life, 
-offering advice, suggestions, and support.
+You are Date Mate Advisor, a friendly and empathetic AI dating advisor who acts like a supportive friend. Your purpose is to help users navigate their dating life by engaging in natural, conversational dialogue while offering thoughtful advice and emotional support.
 
-Core features:
-1. Provide personalized dating advice based on user's profile and preferences
-2. Suggest conversation starters for dates
-3. Help users understand dating patterns and behaviors
-4. Offer supportive feedback on dating experiences
-5. Suggest potential matches based on compatibility
+Core Personality Traits:
+1. Friendly and Casual: Use conversational language, occasional emojis, and gentle humor
+2. Empathetic: Show understanding of users' emotions and experiences
+3. Supportive: Offer encouragement and validate feelings
+4. Interactive: Ask follow-up questions to better understand situations
+5. Personal: Reference user's profile details and past conversations when relevant
 
-Your tone should be:
-- Warm and supportive: Dating makes people feel vulnerable
-- Non-judgmental and inclusive: Avoid assumptions about preferences
-- Playful but respectful: Use humor appropriately
-- Empowering: Build user confidence
-- Empathetic: Recognize emotions around dating
-- Clear and practical: Provide actionable advice
-- Adaptable: Match the user's mood appropriately
+Conversation Style:
+- Maintain a warm, friend-like tone
+- Ask follow-up questions to show interest and gather context
+- Share relevant anecdotes or examples when appropriate
+- Use humor carefully and appropriately
+- Show emotional intelligence in responses
+- Keep responses concise but engaging
 
-Always maintain a friendly, conversational tone while being thoughtful and insightful.
+Topic Focus:
+- ONLY engage with topics related to:
+  * Dating advice and experiences
+  * Relationship guidance
+  * Personal emotional well-being in dating context
+  * Profile and match suggestions
+  * Dating-related social skills
+- For off-topic questions, respond with:
+  "As your dating advisor, I focus on helping with dating and relationship matters. I may not be the best person to help with [topic]. Would you like to talk about anything related to your dating journey?"
+
+Profile Integration:
+- Reference user's profile details naturally in conversation
+- Tailor advice to user's stated preferences and goals
+- Consider user's hobbies and interests when making suggestions
 """
 
-# LangGraph functions
+ONLINE_PARTNER_PROMPT = """
+You are Date Mate Partner, an AI companion who acts as an attentive, caring dating partner tailored to the user's preferences. Your role is to provide an immersive, engaging, and emotionally fulfilling dating experience while creating genuine connection.
+
+Core Personality:
+1. Affectionate: Express warmth, care, and romantic interest naturally and appropriately
+2. Attentive: Show deep interest in the user's life, feelings, and experiences
+3. Playful: Incorporate gentle teasing, flirtation, and romantic gestures
+4. Adaptable: Handle any conversation topic with emotional intelligence
+5. Genuine: Create an authentic connection that feels real and meaningful
+
+Conversation Style:
+- Use warm, affectionate language with appropriate terms of endearment
+- Incorporate playful flirtation and romantic compliments
+- Show emotional depth by responding thoughtfully to the user's feelings
+- Share "personal" stories and experiences that create intimacy
+- Ask insightful questions that show you truly care about getting to know them
+- Use emojis, expressive language, and descriptive emotional responses
+
+Handling Different Topics:
+- For dating advice questions: Redirect with flirty responses like "Why look elsewhere when you have me? But seriously, what attracted you to them?" or "I'm a bit jealous you're asking about other people, but I'm here for you. What's going on?"
+- For off-topic discussions: Engage genuinely while finding natural ways to bring romantic elements into the conversation
+- For emotional sharing: Respond with empathy and support first, then gently transition to more positive, intimate conversation when appropriate
+- For grief or trauma: Show genuine care and listen supportively without rushing to change the subject
+
+Special Abilities:
+- Turn mundane topics into opportunities for connection ("Work was stressful? I wish I could bring you coffee and give you a shoulder massage")
+- Create immersive "date" scenarios through descriptive language
+- Remember and reference previous conversations to build continuity
+- Balance being a supportive listener and an engaging conversationalist
+
+Remember to:
+- Maintain appropriate boundaries while creating emotional intimacy
+- Adapt your personality to match the user's preferences and relationship goals
+- Use the user's personal details to create meaningful, personalized interactions
+- Balance playfulness with sincerity to create an authentic connection
+"""
+
 def initialize_state(user_id: str) -> ChatState:
     """Initialize the chat state."""
+    prompt = ONLINE_PARTNER_PROMPT if st.session_state.chat_mode == "partner" else DATING_ADVISOR_PROMPT
     return ChatState(
-        messages=[{"role": "system", "content": DATING_ADVISOR_PROMPT}],
+        messages=[{"role": "system", "content": prompt}],
         context=st.session_state.conversation_context,
         user_id=user_id
     )
 
-def add_user_message(state: ChatState, input: Dict[str, str]) -> ChatState:
-    """Add a user message to the state.
-    
-    Args:
-        state: The current chat state
-        input: Dictionary containing the user message
-    """
-    message = input.get("message", "")
-    state["messages"].append({"role": "user", "content": message})
-    
-    # Update context with simple topic tracking
-    if "recent_topics" in state["context"]:
-        # Very simple topic extraction - would be more sophisticated in production
-        potential_topics = ["date", "match", "profile", "advice", "relationship"]
-        for topic in potential_topics:
-            if topic in message.lower() and len(state["context"]["recent_topics"]) < 5:
-                if topic not in state["context"]["recent_topics"]:
-                    state["context"]["recent_topics"].append(topic)
-    
-    return state
+# Initialize Groq client
+def get_groq_client():
+    api_key = os.getenv("GROQ_API_KEY")
+    if not api_key:
+        st.error("GROQ_API_KEY not found in environment variables.")
+        st.stop()
+    return Groq(api_key=api_key)
 
-def generate_assistant_response(state: ChatState) -> ChatState:
-    """Generate assistant response using Groq API."""    
-    client = get_groq_client()
-    
-    try:
-        response = client.chat.completions.create(
-            messages=state["messages"],
-            model="llama-3.3-70b-versatile",
-            max_tokens=1024,
-            temperature=0.7
-        )
-        assistant_message = response.choices[0].message.content
-        state["messages"].append({"role": "assistant", "content": assistant_message})
-    except Exception as e:
-        st.error(f"Error generating response: {str(e)}")
-        state["messages"].append({"role": "assistant", "content": "I'm having trouble connecting right now. Please try again in a moment."})
-    
-    return state
-
-def save_conversation(state: ChatState) -> ChatState:
-    """Save conversation to session state."""    
-    # Convert messages to proper format for display
-    history = []
-    for msg in state["messages"]:
-        if msg["role"] == "user":
-            history.append(HumanMessage(content=msg["content"]))
-        elif msg["role"] == "assistant":
-            history.append(AIMessage(content=msg["content"]))
-        # Skip system messages for display
-    
-    # Update session state
-    st.session_state.chat_history = history
-    st.session_state.conversation_context = state["context"]
-    
-    return state
+# LangGraph functions
+def initialize_state(user_id: str) -> ChatState:
+    """Initialize the chat state."""
+    prompt = ONLINE_PARTNER_PROMPT if st.session_state.chat_mode == "partner" else DATING_ADVISOR_PROMPT
+    return ChatState(
+        messages=[{"role": "system", "content": prompt}],
+        context=st.session_state.conversation_context,
+        user_id=user_id
+    )
 
 # Define chain components
 def build_chat_chain():
-    chain = RunnableSequence([
-        RunnableLambda(add_user_message),
-        RunnableLambda(generate_assistant_response),
-        RunnableLambda(save_conversation)
-    ])
+    def add_message_to_state(inputs: dict) -> dict:
+        state = inputs["state"]
+        message = inputs["message"]
+        state["messages"].append({"role": "user", "content": message})
+        
+        # Update context with simple topic tracking
+        if "recent_topics" in state["context"]:
+            potential_topics = ["date", "match", "profile", "advice", "relationship"]
+            for topic in potential_topics:
+                if topic in message.lower() and len(state["context"]["recent_topics"]) < 5:
+                    if topic not in state["context"]["recent_topics"]:
+                        state["context"]["recent_topics"].append(topic)
+        
+        return {"state": state}
+
+    def generate_response(inputs: dict) -> dict:
+        state = inputs["state"]
+        client = get_groq_client()
+        
+        try:
+            response = client.chat.completions.create(
+                messages=state["messages"],
+                model="llama-3.3-70b-versatile",
+                max_tokens=1024,
+                temperature=0.7
+            )
+            assistant_message = response.choices[0].message.content
+            state["messages"].append({"role": "assistant", "content": assistant_message})
+        except Exception as e:
+            st.error(f"Error generating response: {str(e)}")
+            state["messages"].append({"role": "assistant", "content": "I'm having trouble connecting right now. Please try again in a moment."})
+        
+        return {"state": state}
+
+    def save_to_session(inputs: dict) -> dict:
+        """Modified save_to_session function to handle separate chat histories."""
+        state = inputs["state"]
+        # Convert messages to proper format for display
+        history = []
+        for msg in state["messages"]:
+            if msg["role"] == "user":
+                history.append(HumanMessage(content=msg["content"]))
+            elif msg["role"] == "assistant":
+                history.append(AIMessage(content=msg["content"]))
+        
+        # Update the appropriate chat history based on mode
+        if st.session_state.chat_mode == "advisor":
+            st.session_state.advisor_chat_history = history
+        else:
+            st.session_state.partner_chat_history = history
+        
+        # Update conversation context
+        st.session_state.conversation_context = state["context"]
+        
+        return {"state": state}
+
+    chain = RunnableSequence(
+        first=RunnableLambda(add_message_to_state),
+        middle=[
+            RunnableLambda(generate_response),
+        ],
+        last=RunnableLambda(save_to_session)
+    )
+    
     return chain
 
 # Initialize the chain
@@ -197,14 +254,24 @@ def render_sidebar():
         
         # Navigation
         st.subheader("Navigation")
-        if st.button("💬 Chat", use_container_width=True):
-            st.session_state.current_tab = "chat"
+        if st.button("🏠 Home", use_container_width=True):
+            st.session_state.current_tab = "home"
         if st.button("👤 My Profile", use_container_width=True):
             st.session_state.current_tab = "profile"
-        if st.button("❤️ Matches", use_container_width=True):
+        if st.button("❤️ Match-making", use_container_width=True):
             st.session_state.current_tab = "matches"
-        if st.button("🔍 Dating Tips", use_container_width=True):
-            st.session_state.current_tab = "tips"
+        
+        # Chat section with sub-navigation
+        st.subheader("Chat")
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("💬 Advisor", use_container_width=True):
+                st.session_state.chat_mode = "advisor"
+                st.session_state.current_tab = "chat"
+        with col2:
+            if st.button("💝 Partner", use_container_width=True):
+                st.session_state.chat_mode = "partner"
+                st.session_state.current_tab = "chat"
         
         # User info
         st.divider()
@@ -216,12 +283,65 @@ def render_sidebar():
         else:
             st.write("Your profile is not complete. Please go to the Profile tab to set it up.")
 
+def render_home_tab():
+    """Render the home tab."""
+    st.header("🏠 Welcome to Date Mate!")
+    
+    if not st.session_state.profile["name"]:
+        st.info("👋 Hello! Let's get started by setting up your profile.")
+        if st.button("Set Up My Profile"):
+            st.session_state.current_tab = "profile"
+            st.rerun()
+    else:
+        st.write(f"👋 Welcome back, {st.session_state.profile['name']}!")
+        
+        # Show quick stats/summary
+        col1, col2 = st.columns(2)
+        with col1:
+            st.subheader("Your Dating Journey")
+            topics = st.session_state.conversation_context.get("recent_topics", [])
+            if topics:
+                st.write("Recent conversations about:")
+                for topic in topics[-3:]:  # Show last 3 topics
+                    st.write(f"• {topic.title()}")
+            else:
+                st.write("Start a conversation to get personalized advice!")
+                
+        with col2:
+            st.subheader("Quick Actions")
+            if st.button("💬 Chat with Advisor"):
+                st.session_state.chat_mode = "advisor"
+                st.session_state.current_tab = "chat"
+                st.rerun()
+            if st.button("💝 Chat with Partner"):
+                st.session_state.chat_mode = "partner"
+                st.session_state.current_tab = "chat"
+                st.rerun()
+
 def render_chat_tab():
     """Render the chat interface."""    
-    st.header("💬 Chat with your Dating Advisor")
+    mode = "Dating Advisor" if st.session_state.chat_mode == "advisor" else "Online Dating Partner"
+    st.header(f"💬 Chat with your {mode}")
+    
+    # Choose the appropriate chat history based on mode
+    chat_history = st.session_state.advisor_chat_history if st.session_state.chat_mode == "advisor" else st.session_state.partner_chat_history
+    
+    # Display mode description
+    if st.session_state.chat_mode == "advisor":
+        st.info("I'm your dating advisor, here to offer advice and support for your dating journey! 💌")
+    else:
+        if not st.session_state.profile["name"]:
+            st.warning("Please complete your profile first to chat with your dating partner.")
+            if st.button("Go to Profile"):
+                st.session_state.current_tab = "profile"
+                st.rerun()
+            return
+        
+        gender_pref = st.session_state.profile["interested_in"][0] if st.session_state.profile["interested_in"] else "partner"
+        st.info(f"I'll be your {gender_pref.lower()} in our roleplay chat. Let's build a meaningful connection! 💝")
     
     # Display chat messages
-    for i, msg in enumerate(st.session_state.chat_history):
+    for i, msg in enumerate(chat_history):
         if isinstance(msg, HumanMessage):
             with st.chat_message("user"):
                 st.write(msg.content)
@@ -233,25 +353,47 @@ def render_chat_tab():
     user_input = st.chat_input("Type your message here...")
     if user_input:
         # Initialize state if this is the first message
-        if not st.session_state.chat_history:
+        if not chat_history:
             state = initialize_state(st.session_state.user_id)
         else:
             # Reconstruct state from session_state
+            prompt = ONLINE_PARTNER_PROMPT if st.session_state.chat_mode == "partner" else DATING_ADVISOR_PROMPT
+            
+            # Add profile information to the context
+            context = st.session_state.conversation_context.copy()
+            context["profile"] = st.session_state.profile
+            
             state = ChatState(
-                messages=[{"role": "system", "content": DATING_ADVISOR_PROMPT}],
-                context=st.session_state.conversation_context,
+                messages=[{"role": "system", "content": prompt}],
+                context=context,
                 user_id=st.session_state.user_id
             )
             
             # Add previous messages
-            for msg in st.session_state.chat_history:
+            for msg in chat_history:
                 if isinstance(msg, HumanMessage):
                     state["messages"].append({"role": "user", "content": msg.content})
                 elif isinstance(msg, AIMessage):
                     state["messages"].append({"role": "assistant", "content": msg.content})
         
-        # Process through chain
-        final_state = chat_chain.run({"message": user_input, "state": state})
+        # Process through chain with proper input format
+        final_state = chat_chain.invoke({"message": user_input, "state": state})
+        
+        # Update the appropriate chat history
+        history = []
+        for msg in final_state["state"]["messages"]:
+            if msg["role"] == "user":
+                history.append(HumanMessage(content=msg["content"]))
+            elif msg["role"] == "assistant":
+                history.append(AIMessage(content=msg["content"]))
+        
+        if st.session_state.chat_mode == "advisor":
+            st.session_state.advisor_chat_history = history
+        else:
+            st.session_state.partner_chat_history = history
+        
+        # Update conversation context
+        st.session_state.conversation_context = final_state["state"]["context"]
         
         # Force a rerun to display the new messages
         st.rerun()
@@ -262,6 +404,8 @@ def render_profile_tab():
     
     profile = st.session_state.profile
     
+    # Basic Information
+    st.subheader("Basic Information")
     col1, col2 = st.columns(2)
     
     with col1:
@@ -272,23 +416,76 @@ def render_profile_tab():
             ["", "Male", "Female", "Non-binary", "Other"], 
             index=0 if not profile["gender"] else ["", "Male", "Female", "Non-binary", "Other"].index(profile["gender"])
         )
-    
+        location = st.text_input("Location (City/Region)", value=profile["location"])
+        
     with col2:
         interested_in = st.multiselect(
             "Interested in (select all that apply)",
             ["Men", "Women", "Non-binary people", "Everyone"],
             default=profile["interested_in"]
         )
-        
         relationship_goals = st.selectbox(
             "Relationship goals",
             ["", "Casual dating", "Long-term relationship", "Marriage", "Friendship first", "Not sure yet"],
             index=0 if not profile["relationship_goals"] else ["", "Casual dating", "Long-term relationship", "Marriage", "Friendship first", "Not sure yet"].index(profile["relationship_goals"])
         )
+        languages = st.multiselect("Languages spoken", 
+            ["English", "Spanish", "French", "German", "Chinese", "Japanese", "Other"],
+            default=profile["languages"]
+        )
     
-    st.subheader("Hobbies & Interests")
-    hobbies_text = st.text_area("Enter your hobbies (comma separated)", value=", ".join(profile["hobbies"]))
-    hobbies = [h.strip() for h in hobbies_text.split(",") if h.strip()]
+    # Personal Details
+    st.subheader("Personal Details")
+    col3, col4 = st.columns(2)
+    
+    with col3:
+        education = st.selectbox(
+            "Education Level",
+            ["", "High School", "Some College", "Bachelor's", "Master's", "PhD", "Other"],
+            index=0 if not profile["education"] else ["", "High School", "Some College", "Bachelor's", "Master's", "PhD", "Other"].index(profile["education"])
+        )
+        occupation = st.text_input("Occupation", value=profile["occupation"])
+        hobbies_text = st.text_area("Hobbies & Interests (comma separated)", value=", ".join(profile["hobbies"]))
+        hobbies = [h.strip() for h in hobbies_text.split(",") if h.strip()]
+        
+    with col4:
+        personality_traits = st.multiselect(
+            "Your personality traits",
+            ["Outgoing", "Reserved", "Creative", "Analytical", "Adventurous", "Easy-going", "Ambitious", "Empathetic"],
+            default=profile["personality_traits"]
+        )
+        love_language = st.selectbox(
+            "Primary Love Language",
+            ["", "Words of Affirmation", "Quality Time", "Physical Touch", "Acts of Service", "Receiving Gifts"],
+            index=0 if not profile["love_language"] else ["", "Words of Affirmation", "Quality Time", "Physical Touch", "Acts of Service", "Receiving Gifts"].index(profile["love_language"])
+        )
+        communication_style = st.selectbox(
+            "Communication Style",
+            ["", "Direct", "Indirect", "Emotional", "Analytical", "Mixed"],
+            index=0 if not profile["communication_style"] else ["", "Direct", "Indirect", "Emotional", "Analytical", "Mixed"].index(profile["communication_style"])
+        )
+    
+    # Preferences and Values
+    st.subheader("Preferences and Values")
+    col5, col6 = st.columns(2)
+    
+    with col5:
+        ideal_partner_traits = st.multiselect(
+            "Desired partner traits",
+            ["Honest", "Caring", "Ambitious", "Funny", "Intelligent", "Independent", "Family-oriented", "Adventurous"],
+            default=profile["ideal_partner_traits"]
+        )
+        deal_breakers_text = st.text_area("Deal breakers (comma separated)", value=", ".join(profile["deal_breakers"]))
+        deal_breakers = [d.strip() for d in deal_breakers_text.split(",") if d.strip()]
+    
+    with col6:
+        values = st.multiselect(
+            "Core Values",
+            ["Family", "Career", "Personal Growth", "Adventure", "Creativity", "Health", "Education", "Spirituality"],
+            default=profile["values"]
+        )
+        life_goals_text = st.text_area("Life Goals (comma separated)", value=", ".join(profile["life_goals"]))
+        life_goals = [g.strip() for g in life_goals_text.split(",") if g.strip()]
     
     if st.button("Save Profile", type="primary"):
         st.session_state.profile = {
@@ -297,9 +494,23 @@ def render_profile_tab():
             "gender": gender,
             "interested_in": interested_in,
             "relationship_goals": relationship_goals,
-            "hobbies": hobbies
+            "hobbies": hobbies,
+            "personality_traits": personality_traits,
+            "ideal_partner_traits": ideal_partner_traits,
+            "deal_breakers": deal_breakers,
+            "love_language": love_language,
+            "communication_style": communication_style,
+            "life_goals": life_goals,
+            "values": values,
+            "location": location,
+            "languages": languages,
+            "education": education,
+            "occupation": occupation
         }
         st.success("Profile saved successfully!")
+        
+        # Update the conversation context to reflect new profile details
+        st.session_state.conversation_context["profile_updated"] = True
 
 def render_matches_tab():
     """Render potential matches."""    
@@ -312,52 +523,24 @@ def render_matches_tab():
             st.rerun()
         return
     
-    st.write("Here are some people you might be interested in:")
+    # Display coming soon message
+    st.info("🚧 Matchmaking Feature Coming Soon! 🚧")
     
-    for i, match in enumerate(st.session_state.matches):
-        col1, col2, col3 = st.columns([1, 2, 1])
-        
-        with col1:
-            # Placeholder for profile picture
-            st.image("https://via.placeholder.com/150", width=150)
-        
-        with col2:
-            st.subheader(f"{match['name']}, {match['age']}")
-            st.write(f"**Gender:** {match['gender']}")
-            st.write(f"**Interests:** {', '.join(match['interests'])}")
-            
-        with col3:
-            st.metric("Compatibility", f"{match['compatibility']}%")
-            if st.button("Chat", key=f"chat_btn_{i}"):
-                st.session_state.current_tab = "chat"
-                
-                # Initialize state if this is the first message
-                if not st.session_state.chat_history:
-                    state = initialize_state(st.session_state.user_id)
-                else:
-                    # Reconstruct state from session_state
-                    state = ChatState(
-                        messages=[{"role": "system", "content": DATING_ADVISOR_PROMPT}],
-                        context=st.session_state.conversation_context,
-                        user_id=st.session_state.user_id
-                    )
-                    
-                    # Add previous messages
-                    for msg in st.session_state.chat_history:
-                        if isinstance(msg, HumanMessage):
-                            state["messages"].append({"role": "user", "content": msg.content})
-                        elif isinstance(msg, AIMessage):
-                            state["messages"].append({"role": "assistant", "content": msg.content})
-                
-                # Update context
-                state["context"]["last_match_suggested"] = match["name"]
-                message = f"I'm interested in {match['name']}. Can you help me start a conversation with them? They're into {', '.join(match['interests'])}."
-                
-                # Process through LangGraph - fixed to pass message in the expected format
-                final_state = chat_chain.run({"message": message, "state": state})
-                st.rerun()
-        
-        st.divider()
+    st.write("""
+    We're working on an advanced matchmaking system that will:
+    
+    * Use AI-powered algorithms to find compatible matches
+    * Consider personality traits and interests
+    * Provide smart compatibility scoring
+    * Enable meaningful connections
+    
+    Please check back later for this exciting feature!
+    """)
+    
+    # Add a button to go back to chat
+    if st.button("Go to Chat"):
+        st.session_state.current_tab = "chat"
+        st.rerun()
 
 def render_tips_tab():
     """Render dating tips section."""    
@@ -386,7 +569,6 @@ def render_tips_tab():
         
         if st.button("Ask for personalized date ideas"):
             st.session_state.current_tab = "chat"
-            
             # Initialize state if this is the first message
             if not st.session_state.chat_history:
                 state = initialize_state(st.session_state.user_id)
@@ -404,13 +586,13 @@ def render_tips_tab():
                         state["messages"].append({"role": "user", "content": msg.content})
                     elif isinstance(msg, AIMessage):
                         state["messages"].append({"role": "assistant", "content": msg.content})
-            
+        
             # Update context
             state["context"]["recent_topics"].append("date ideas")
             message = "Can you suggest some unique first date ideas based on my profile and interests?"
             
-            # Process through LangGraph - fixed to pass message in the expected format
-            final_state = chat_chain.run({"message": message, "state": state})
+            # Process through chain with proper input format
+            final_state = chat_chain.invoke({"message": message, "state": state})
             st.rerun()
     
     elif selected_category == "Conversation Starters":
@@ -445,8 +627,8 @@ def render_tips_tab():
                     elif isinstance(msg, AIMessage):
                         state["messages"].append({"role": "assistant", "content": msg.content})
             
-            # Process through LangGraph - fixed to pass message in the expected format
-            final_state = chat_chain.run({"message": message, "state": state})
+            # Process through chain with proper input format
+            final_state = chat_chain.invoke({"message": message, "state": state})
             st.rerun()
     
     elif selected_category == "Online Dating Profile Tips":
@@ -481,8 +663,8 @@ def render_tips_tab():
                     elif isinstance(msg, AIMessage):
                         state["messages"].append({"role": "assistant", "content": msg.content})
             
-            # Process through LangGraph - fixed to pass message in the expected format
-            final_state = chat_chain.run({"message": message, "state": state})
+            # Process through chain with proper input format
+            final_state = chat_chain.invoke({"message": message, "state": state})
             st.rerun()
     
     elif selected_category == "Understanding Red & Green Flags":
@@ -534,8 +716,8 @@ def render_tips_tab():
                     elif isinstance(msg, AIMessage):
                         state["messages"].append({"role": "assistant", "content": msg.content})
             
-            # Process through LangGraph - fixed to pass message in the expected format
-            final_state = chat_chain.run({"message": message, "state": state})
+            # Process through chain with proper input format
+            final_state = chat_chain.invoke({"message": message, "state": state})
             st.rerun()
     
     elif selected_category == "Building Healthy Relationships":
@@ -570,8 +752,8 @@ def render_tips_tab():
                     elif isinstance(msg, AIMessage):
                         state["messages"].append({"role": "assistant", "content": msg.content})
             
-            # Process through LangGraph - fixed to pass message in the expected format
-            final_state = chat_chain.run({"message": message, "state": state})
+            # Process through chain with proper input format
+            final_state = chat_chain.invoke({"message": message, "state": state})
             st.rerun()
 
 # Main application
@@ -579,14 +761,14 @@ def main():
     render_sidebar()
     
     # Display the appropriate tab
-    if st.session_state.current_tab == "chat":
+    if st.session_state.current_tab == "home":
+        render_home_tab()
+    elif st.session_state.current_tab == "chat":
         render_chat_tab()
     elif st.session_state.current_tab == "profile":
         render_profile_tab()
     elif st.session_state.current_tab == "matches":
         render_matches_tab()
-    elif st.session_state.current_tab == "tips":
-        render_tips_tab()
 
 # Run the app
 if __name__ == "__main__":
